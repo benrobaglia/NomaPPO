@@ -352,8 +352,8 @@ class NomaPPO:
             state, sensing_obs = self.env.reset()
             done = False
             while not done:
-                state = torch.tensor(state, dtype=torch.float)
-                sensing_obs = torch.tensor(sensing_obs, dtype=torch.float)
+                state = torch.tensor(state, dtype=torch.float).to(self.device)
+                sensing_obs = torch.tensor(sensing_obs, dtype=torch.float).to(self.device)
         
                 # Normalizing the sensing_obs
                 sensing_obs /= 5
@@ -389,8 +389,8 @@ class NomaPPO:
             current_ep_reward = 0
 
             while not done:
-                state = torch.tensor(state, dtype=torch.float)
-                sensing_obs = torch.tensor(sensing_obs, dtype=torch.float)
+                state = torch.tensor(state, dtype=torch.float).to(self.device)
+                sensing_obs = torch.tensor(sensing_obs, dtype=torch.float).to(self.device)
 
                 # Normalizing the sensing_obs
                 sensing_obs /= 5

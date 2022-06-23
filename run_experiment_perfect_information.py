@@ -5,6 +5,8 @@ import os
 from envs.env_noma_discrete import CentralizedEnvNomaDiscretePoissonURLLC
 from algorithms.noma_ppo_discrete import *
 
+CUDA_VISIBLE_DEVICES=0
+
 xp_name = 'perfect_sensing_results'
 
 # Create the folder
