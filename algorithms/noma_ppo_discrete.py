@@ -320,7 +320,7 @@ class NomaPPO:
             # final loss of clipped objective PPO
             policy_loss = - torch.min(surr1, surr2) - 0.1 * dist_entropy
             # value_loss = self.MseLoss(state_values, rewards)
-            value_loss = self.MseLoss(state_values, returns)
+            value_loss = self.MseLoss(state_values, returns.to(self.device))
 
             # take gradient step
             self.policy_optimizer.zero_grad()
