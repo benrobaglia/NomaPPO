@@ -13,7 +13,7 @@ def init_weights(m, gain):
 
 def compute_gae(rewards, dones, values, gamma, lbda=0.95):
     gae = 0
-    values_np = values.detach().numpy()
+    values_np = values.cpu().detach().numpy()
     adv = [rewards[-1] - values_np[-1]]
     for step in reversed(range(len(rewards)-1)):
         delta = rewards[step] + gamma * values_np[step + 1] * (1-dones[step]) - values_np[step]
