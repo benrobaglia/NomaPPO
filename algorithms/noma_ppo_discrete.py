@@ -313,6 +313,7 @@ class NomaPPO:
             # Finding Surrogate Loss
             # advantages = rewards - state_values.detach()   
             advantages = compute_gae(self.buffer.rewards, self.buffer.is_terminals, state_values, self.gamma, 0.7)
+            advantages = advantages.to(self.device)
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
