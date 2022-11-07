@@ -1,3 +1,5 @@
 .ipynb_checkpoints/
 __pycache__/
 algorithms/__pycache__/baselines.cpython-39.pyc
+.DS_Store
+.gitattributes
