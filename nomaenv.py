@@ -35,9 +35,9 @@ class NomaEnv:
         self.channel_model = channel_model
 
         self.action_space = list(range(k))
-        self.action_space_combinatorial = []
-        for i in range(1, k + 1):
-            self.action_space_combinatorial += list(combinations(range(k), i))
+        # self.action_space_combinatorial = []
+        # for i in range(1, k + 1):
+        #     self.action_space_combinatorial += list(combinations(range(k), i))
         
         self.distances = distances
         self.path_loss = path_loss
@@ -164,6 +164,16 @@ class NomaEnv:
         
         return np.copy(self.agent_obs).astype(np.float32)
     
+    def preprocess_state(self, state):
+        output = []
+        for row in state:
+            packets = np.nonzero(row)[0]
+            if len(packets) > 0:
+                output.append(packets.min())
+            else:
+                output.append(-1)
+        return np.array(output)
+
     def compute_channel_components(self):
         g = 10**(self.G_UE / 10)
         new_h = self.update_h(self.h_history[-1])
@@ -173,7 +183,6 @@ class NomaEnv:
         return self.pt * g, h_coeffs
     
     def decode_signal(self, attempts, pg, h_coeffs):
-        sinrs = np.zeros_like(attempts)
         attempts_idx = attempts.nonzero()[0]
         h2 = np.linalg.norm(h_coeffs.dot(h_coeffs.getH()).diagonal(), axis=0)
         eta = pg*h2
@@ -183,11 +192,15 @@ class NomaEnv:
         if self.verbose:
             print(f"attempts: {attempts_idx}, eta: {eta}, decoding order: {attempts_idx[decoding_order]}")
             print(f"fast fading ||h||^2: {h2}")
+            print(f"h_coeffs: {h_coeffs}")
         decoded_idx = []
         sinrs_attempts = []
         for i, device in enumerate(decoding_order):
             interference = np.delete(decoding_order, decoded_idx + [i])
-            sinr = eta_attempts[device] / (self.N + eta_attempts[interference].sum())
+            sinr = eta_attempts[device] / (self.N + (pg[attempts_idx[interference]] * np.linalg.norm(h_coeffs[attempts_idx[device],
+                                                                                                         attempts_idx[interference]],axis=0) / h2[attempts_idx[device]]).sum())
+            # sinr = eta_attempts[device] / (self.N + (eta_attempts[interference]).sum())
+
             sinrs_attempts.append(sinr)
             eps = self.compute_epsilon(sinr)
             rv = np.random.binomial(1, 1-eps)
@@ -197,10 +210,7 @@ class NomaEnv:
                 print(f"Device: {attempts_idx[device]}, sinr {sinr}, interference: {attempts_idx[interference]}")
                 print(f"epsilon: {eps}, decoded: {rv}")
         decoded_idx = attempts_idx[decoding_order[decoded_idx]]
-        sinrs[decoded_idx] = sinrs_attempts
-        print(decoded_idx)
-        print(sinrs)
-        return decoded_idx, sinrs
+        return decoded_idx, sinrs_attempts
 
     
     def step(self, action):
