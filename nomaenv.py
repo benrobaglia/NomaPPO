@@ -313,7 +313,8 @@ class NomaEnv:
         # Load buffers of the polled devices
         if (next_state[devices_polled].sum(1) > 0).sum() <= self.max_simultaneous_devices:
             next_obs[devices_polled] = next_state[devices_polled]
-        
+        # next_obs[devices_polled] = next_state[devices_polled]
+
         if self.verbose:
             print(f"Timestep {self.timestep}")
             print(f"State {self.current_state}")
