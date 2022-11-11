@@ -158,6 +158,7 @@ class NomaEnv:
         self.discarded_packets = 0
         self.received_packets = np.copy(self.current_state).sum(1)
         self.successful_transmissions = 0
+        self.channel_losses = 0
         self.last_time_transmitted = np.ones(self.k)
         self.last_time_since_polled = np.ones(self.k)
         self.last_feedback = 0
@@ -183,9 +184,10 @@ class NomaEnv:
         return self.pt * g, h_coeffs
     
     def decode_signal(self, attempts, pg, h_coeffs):
+        h_coeffs = np.array(h_coeffs)
         attempts_idx = attempts.nonzero()[0]
-        h2 = np.linalg.norm(h_coeffs.dot(h_coeffs.getH()).diagonal(), axis=0)
-        eta = pg*h2
+        h2 = np.absolute(np.diag(h_coeffs))
+        eta = pg * h2.reshape(-1)
         eta_attempts = eta[attempts_idx]
         decoding_order = (-eta_attempts).argsort() # We put "-" because we want to sort by descending
         # To have the real indices of the devices to decode: attempts_idx[decoding_order]
@@ -197,8 +199,8 @@ class NomaEnv:
         sinrs_attempts = []
         for i, device in enumerate(decoding_order):
             interference = np.delete(decoding_order, decoded_idx + [i])
-            sinr = eta_attempts[device] / (self.N + (pg[attempts_idx[interference]] * np.linalg.norm(h_coeffs[attempts_idx[device],
-                                                                                                         attempts_idx[interference]],axis=0) / h2[attempts_idx[device]]).sum())
+            sinr = eta_attempts[device] / (self.N + (pg[attempts_idx[interference]] * np.absolute(h_coeffs[attempts_idx[device],
+                                                                                                         attempts_idx[interference]])**2 / h2[attempts_idx[device]]).sum())
             # sinr = eta_attempts[device] / (self.N + (eta_attempts[interference]).sum())
 
             sinrs_attempts.append(sinr)
@@ -246,6 +248,8 @@ class NomaEnv:
                 self.sinrs.append(sinrs)
                 reward = len(decoded_idx)
                 self.successful_transmissions += len(decoded_idx)
+                self.channel_losses += len(attempts_idx) - len(decoded_idx)
+            
             
             # Remove the decoded packets in the buffers 
             devices_polled_obs = []
@@ -311,7 +315,8 @@ class NomaEnv:
                 self.received_packets[ao] += next_state[ao, self.deadlines[ao]-1]
         
         # Load buffers of the polled devices
-        if (next_state[devices_polled].sum(1) > 0).sum() <= self.max_simultaneous_devices:
+        # if (next_state[devices_polled].sum(1) > 0).sum() <= self.max_simultaneous_devices:
+        if m <= self.max_simultaneous_devices:
             next_obs[devices_polled] = next_state[devices_polled]
         # next_obs[devices_polled] = next_state[devices_polled]
 

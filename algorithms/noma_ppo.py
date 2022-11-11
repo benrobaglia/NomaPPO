@@ -119,7 +119,8 @@ class NomaPPO:
                  K_epochs=4,
                  eps_clip=0.1,
                  prior_weight=0.6,
-                 beta=0.1
+                 beta=0.1,
+                 scheduler=False
 ):
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -131,6 +132,7 @@ class NomaPPO:
         self.K_epochs = K_epochs
         self.prior_weight = prior_weight
         self.beta = beta
+        self.scheduler = scheduler
         
         self.buffer = RolloutBuffer()
         self.observation_size = 2 * env.k + 1
@@ -239,7 +241,8 @@ class NomaPPO:
             policy_loss.mean().backward()
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 80)
             self.policy_optimizer.step()
-            # self.policy_scheduler.step()
+            if self.scheduler:
+                self.policy_scheduler.step()
             
             self.critic_optimizer.zero_grad()
             value_loss.mean().backward()
@@ -279,6 +282,7 @@ class NomaPPO:
                     print(f"Current state: {self.env.current_state}")
                     print(f"obs: {pobs}, Prior: {prior}")
                     print(f"Action: {ac}")
+                    print(f"Number discarded: {self.env.discarded_packets}")
                 obs, rwd, done = self.env.step(ac.numpy())
                 if verbose:
                     print(f"reward: {rwd}\n\n")
@@ -343,7 +347,7 @@ class NomaPPO:
                     if ts == 1:
                         return training_scores, rewards_list, policy_loss_list, value_loss_list
                 training_scores.append(ts)
-                print(f"Episode : {episode} \t Average Reward : {np.mean(rollup_rewards)} \t Rolling scores: {np.mean(rolling_scores)} \t Test score : {ts}")
+                print(f"Episode : {episode}, Reward : {np.mean(rollup_rewards)}, Train scores: {np.mean(rolling_scores)}, Test score : {ts}, policy lr: {self.policy_optimizer.param_groups[0]['lr']}")
                 rollup_rewards = []
                 rolling_scores = []
 
