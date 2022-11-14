@@ -314,11 +314,12 @@ class NomaEnv:
                 next_state[ao, self.deadlines[ao]-1] = np.random.binomial(1, self.arrival_probs[ao])
                 self.received_packets[ao] += next_state[ao, self.deadlines[ao]-1]
         
-        # Load buffers of the polled devices
-        # if (next_state[devices_polled].sum(1) > 0).sum() <= self.max_simultaneous_devices:
+        # Load buffers of the polled devices through the orthogonal pilots.
         if m <= self.max_simultaneous_devices:
-            next_obs[devices_polled] = next_state[devices_polled]
-        # next_obs[devices_polled] = next_state[devices_polled]
+            next_obs[decoded_idx] = next_state[decoded_idx]
+        else:
+            next_obs[devices_polled, 2] = has_a_packet[devices_polled] # When there is a collision, the BS only knows what device caused it.
+        next_obs[:, -1] = 0 # The agent cannot see the new arrivals.
 
         if self.verbose:
             print(f"Timestep {self.timestep}")
