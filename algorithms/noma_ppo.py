@@ -118,7 +118,7 @@ class NomaPPO:
                  gamma=0.99,
                  K_epochs=4,
                  eps_clip=0.1,
-                 prior_weight=0.6,
+                 prior_weight=None,
                  beta=0.1,
                  scheduler=False
 ):
@@ -150,24 +150,30 @@ class NomaPPO:
         self.MseLoss = nn.MSELoss()
 
     def compute_prior(self, x):
-        # Compute the prior given the internal state of the agent.
-        agg_state = self.env.preprocess_state(x)
-        prior = torch.zeros(self.env.k)
-        # has_a_packet: idx of the devices that have a packet to transmit.
-        has_a_packet = (agg_state + 1).nonzero()[0]
-        sorted_idx = agg_state[has_a_packet].argsort()[:self.env.max_simultaneous_devices]
-
-        if len(has_a_packet) >= self.env.max_simultaneous_devices:
-            # We set the prior according to the edf scheduler
-            prior[has_a_packet[sorted_idx]] = 1.
-        elif (len(has_a_packet) < self.env.max_simultaneous_devices) & (len(has_a_packet) > 0):
-            # We set the prior of the default prior to prior_weight
-            prior += self.prior_weight
-            prior[has_a_packet[sorted_idx]] = 1.
+        # Compute the prior given the internal state of the agent and the last time since polled
+        if self.prior_weight is None:
+            return torch.ones(self.env.k).to(self.device)
         else:
-            # We explore: no prior
-            prior += 1.
-        return prior.to(self.device)
+            # last_time_since_polled = self.env.last_time_since_polled
+            agg_state = self.env.preprocess_state(x)
+            prior = torch.zeros(self.env.k)
+            # has_a_packet: idx of the devices that have a packet to transmit.
+            has_a_packet = (agg_state + 1).nonzero()[0]
+            sorted_idx = agg_state[has_a_packet].argsort()[:self.env.max_simultaneous_devices]
+
+            if len(has_a_packet) >= self.env.max_simultaneous_devices:
+                # We set the prior according to the edf scheduler
+                prior[has_a_packet[sorted_idx]] = 1.
+            elif (len(has_a_packet) < self.env.max_simultaneous_devices) & (len(has_a_packet) > 0):
+                # We set the prior of the default prior to prior_weight and the oldest devices to 1.
+                # oldest = (-last_time_since_polled).argsort()[:self.env.max_simultaneous_devices - len(has_a_packet)]
+                prior += self.prior_weight
+                prior[has_a_packet[sorted_idx]] = 1.
+                # prior[oldest] = 1.
+            else:
+                # We explore: no prior
+                prior += 1.
+            return prior.to(self.device)
 
     def build_obs(self, obs):
         #last_time_transmitted = self.env.last_time_transmitted
@@ -185,8 +191,11 @@ class NomaPPO:
             action = dist.sample()
             action = action.squeeze()
         else:
-            action = dist.probs.squeeze() > 0.5
-            action = action * 1.
+            if prior.sum() == self.env.max_simultaneous_devices:
+                action = prior
+            else:
+                action = dist.probs.squeeze() > 0.5
+                action = action * 1.
         action_logprob = dist.log_prob(action).mean(-1)
         
         return action.detach().cpu(), action_logprob.detach().cpu()
@@ -269,6 +278,8 @@ class NomaPPO:
     def test(self, n_episodes=100, verbose=False):
         received_list = []
         discarded_list = []
+        sense_list = []
+        channel_errors = []
         for e in range(n_episodes):
             obs = self.env.reset()
             done = False
@@ -289,7 +300,9 @@ class NomaPPO:
 
             received_list.append(self.env.received_packets.sum())
             discarded_list.append(self.env.discarded_packets)
-        return 1 - np.sum(discarded_list) / np.sum(received_list)
+            sense_list.append(self.env.nb_sense)
+            channel_errors.append(self.env.channel_losses)
+        return 1 - np.sum(discarded_list) / np.sum(received_list), np.mean(channel_errors), np.mean(sense_list) / self.env.episode_length
     
     def learn(self,
                 n_episodes,
@@ -342,7 +355,7 @@ class NomaPPO:
                 pl, vl = self.update()
                 policy_loss_list.extend(pl)
                 value_loss_list.extend(vl)
-                ts = self.test(test_length)
+                ts, _, _ = self.test(test_length)
                 if early_stopping:
                     if ts == 1:
                         return training_scores, rewards_list, policy_loss_list, value_loss_list

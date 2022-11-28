@@ -45,11 +45,11 @@ class NomaEnv:
         self.fast_fading = fast_fading
         # Channel parameters
         self.W = 38.16e6 # 40MHz minus guard bands
-        Ti = 1 / 30 * 1e-3 
+        self.Ti = 1 / 30 * 1e-3 
         Tp = 2.34e-6
-        T = Ti+Tp # slot duration
+        T = self.Ti+Tp # slot duration
         self.Tf = 6*T # frame duration
-        self.n = self.W*Ti
+        self.n = self.W*self.Ti
         L_info = 32 # information bits
         L_crc = 2 # CRC 38.212
         L_mac = 2 # 1 MAC subheader 38.321
@@ -77,14 +77,18 @@ class NomaEnv:
     def icdf(self, t):
         return - np.log(1-t) / self.lbda
     
+    def compute_data_rate(self, n_devices):
+        n = (self.W - n_devices * 30e3) * self.Ti
+        return self.L / n
+
     def capa(self, gamma):
         return np.log2(1+gamma)
     
     def disp(self, gamma):
         return gamma/2*(gamma+2)/(gamma+1)**2*np.log2(np.e)**2
     
-    def compute_epsilon(self, gamma):
-        epsilon = 1-norm.cdf(np.sqrt(self.n/self.disp(gamma))*(self.capa(gamma)-self.R))
+    def compute_epsilon(self, gamma, n_devices):
+        epsilon = 1-norm.cdf(np.sqrt(self.n/self.disp(gamma))*(self.capa(gamma)-self.compute_data_rate(n_devices=n_devices)))
         return epsilon
     
     def add_path_loss(self, d):
@@ -154,6 +158,7 @@ class NomaEnv:
         self.h_history.append(h)
         
         self.sinrs = []
+        self.nb_sense = 0
         self.timestep = 0
         self.discarded_packets = 0
         self.received_packets = np.copy(self.current_state).sum(1)
@@ -204,7 +209,7 @@ class NomaEnv:
             # sinr = eta_attempts[device] / (self.N + (eta_attempts[interference]).sum())
 
             sinrs_attempts.append(sinr)
-            eps = self.compute_epsilon(sinr)
+            eps = self.compute_epsilon(sinr, len(attempts))
             rv = np.random.binomial(1, 1-eps)
             if rv == 1:
                 decoded_idx.append(i)
@@ -249,6 +254,7 @@ class NomaEnv:
                 reward = len(decoded_idx)
                 self.successful_transmissions += len(decoded_idx)
                 self.channel_losses += len(attempts_idx) - len(decoded_idx)
+            self.last_time_transmitted[decoded_idx] = 1.
             
             
             # Remove the decoded packets in the buffers 
@@ -275,11 +281,14 @@ class NomaEnv:
 
 
         elif m > self.max_simultaneous_devices:
-            reward = -1
+            reward = 0
 
         else:
             raise ValueError("m takes an impossible value")           
 
+        # Penalize the reward
+        to_penalize = (self.last_time_since_polled > self.deadlines.max())*1
+        reward -= to_penalize.sum() * 0.1
         
         # Incrementation
         row, col = np.nonzero(next_state)
@@ -314,12 +323,24 @@ class NomaEnv:
                 next_state[ao, self.deadlines[ao]-1] = np.random.binomial(1, self.arrival_probs[ao])
                 self.received_packets[ao] += next_state[ao, self.deadlines[ao]-1]
         
-        # Load buffers of the polled devices through the orthogonal pilots.
+        # Load buffers of the polled devices through the transmitted packets.
         if m <= self.max_simultaneous_devices:
-            next_obs[decoded_idx] = next_state[decoded_idx]
-        else:
-            next_obs[devices_polled, 2] = has_a_packet[devices_polled] # When there is a collision, the BS only knows what device caused it.
-        next_obs[:, -1] = 0 # The agent cannot see the new arrivals.
+            state = next_state.copy()
+            state[:, -1] = 0 # The agent cannot see the new arrivals
+            next_obs[devices_polled] = state[devices_polled]
+        # Get whether a device has a packet or not through the pilots
+        sensing_state = next_state.copy()
+        # to_sense = (self.last_time_transmitted > self.deadlines) * 1
+        # to_sense = np.unique(np.concatenate([to_sense.nonzero()[0], devices_polled]))
+        # self.nb_sense += len(to_sense) - m
+        # not_sense = np.setdiff1d(np.arange(self.k), devices_polled)
+        # sensing_state[not_sense] = 0
+        sensing_state[:, -1] = 0 # The agent cannot see the new arrivals.
+        # next_state_buffers = sensing_state.sum(1).nonzero()[0]
+        # next_obs_buffers = next_obs.sum(1).nonzero()[0]
+        # obs_to_add = np.setdiff1d(next_state_buffers, next_obs_buffers)
+        # next_obs[obs_to_add, 3] = 1.
+        next_obs[devices_polled] = sensing_state[devices_polled]
 
         if self.verbose:
             print(f"Timestep {self.timestep}")

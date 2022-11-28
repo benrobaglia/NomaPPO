@@ -4,7 +4,7 @@ from nomaenv import NomaEnv
 from algorithms.baselines import RandomScheduler, EarliestDeadlineFirstScheduler, SlottedAloha
 import random
 
-output_name = 'results/baselines_aperiodic_collision_3gpp.p'
+output_name = 'results/baselines_aperiodic_collision_3gpp_deadline6.p'
 
 # Fix random seed
 random_seed = 42
@@ -12,7 +12,7 @@ random.seed(random_seed)
 np.random.seed(random_seed)
 
 # Environment parameters (Config for aperiodic collision model)
-episode_length=100
+episode_length=200
 max_simultaneous_devices=3
 traffic_model='aperiodic'
 channel_model='collision'
@@ -22,7 +22,7 @@ shadowing=False
 fast_fading=False
 verbose=False
 lbda = 1/9.3
-deadline = 5
+deadline = 6
 
 # Global parameters of the experiment
 k_list = [4, 8, 12, 16, 20]
