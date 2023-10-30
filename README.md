@@ -6,6 +6,8 @@ This is the code associated with our paper "Deep Reinforcement Learning for Upli
 Requirements can be found in the requirements.txt file.
 
 ## Structure
+The experiment folders are in results/scenario3gpp and results/scenario3gppFactory.
+
 The environment of the project is in nomaenv.py. The algorithms used for the experiments are in the algorithms folder. 
 
 - baselines.py: code for the Random scheduler, Earliest Deadline First scheduler, Slotted ALOHA (GF access) and prior agent (scheduler using the prior only).
@@ -23,3 +25,11 @@ The template to run an experiment is in run_noma_ppo.py. Execute it with:
 python -m run_noma_ppo.py
 ```
 
+## Experiment settings
+The parameters for the experiments are in the baselines.p files. In particular, there are parameters for the distances and the shadowing. We can access them using:
+
+```python
+    baselines = pickle.load(open('results/scenario3gpp/baselines.p', 'rb'))
+    manual_distances_dic = baselines['manual_distances']
+    manual_shadowing_dic = baselines['manual_shadowing']
+```
