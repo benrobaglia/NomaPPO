@@ -194,6 +194,8 @@ class iDQN:
         
         received_list = []
         discarded_list = []
+        test_list = []
+        reward_list = []
 
         for ep in range(n_episodes):
             score = 0
@@ -204,7 +206,7 @@ class iDQN:
             lst_feedback = np.zeros((self.env.k, 1)) + self.env.last_feedback
             state = np.concatenate([state, lst_feedback], axis=1)
             state = torch.tensor(state, dtype=torch.float).to(self.device)
-
+    
             while not done:
                 actions = []
                 for i,a in enumerate(self.agents):
@@ -215,7 +217,7 @@ class iDQN:
                     a.update_epsilon(ep)
                     
                 _, rewards, done = self.env.step(np.array(actions))
-                score += rewards
+                score += rewards.sum()
                 
                 state_next = self.env.current_state.copy()
                 lst_feedback = np.zeros((self.env.k, 1)) + self.env.last_feedback
@@ -225,7 +227,7 @@ class iDQN:
                 
                 for i, a in enumerate(self.agents):
                     action_n = torch.as_tensor([actions[i]], dtype=torch.long)
-                    reward_n = torch.as_tensor([rewards], dtype=torch.float)
+                    reward_n = torch.as_tensor([rewards[i]], dtype=torch.float)
                     done = torch.as_tensor([done], dtype=torch.float)
                     state_n = state[i]
                     state_next_n = state_next[i]
@@ -237,9 +239,11 @@ class iDQN:
                                         done)
                     state = state_next
 
-            if ep % 100 == 0:
-                score_tst = self.test_idqn(10)
-                print(f"Episode: {ep}, Train score: {score}, Test score: {score_tst}")
+            if ep % 20 == 0:
+                ts, tr = self.test_idqn(10)
+                test_list.append(ts)
+                reward_list.append(tr)
+                print(f"Episode: {ep}, Running reward: {score}, Test score: {ts} epsilon: {self.agents[0].epsilon}")
                     
             received_list.append(self.env.received_packets.sum())
             discarded_list.append(self.env.discarded_packets)
@@ -258,13 +262,14 @@ class iDQN:
     #     for a in agents:
     #         state_dicts.append(a.network.state_dict())
                     
-        return 1 - np.sum(discarded_list) / np.sum(received_list)
+        return test_list, reward_list
 
 
     def test_idqn(self, n_episodes, verbose=False):
         
         received_list = []
         discarded_list = []
+        reward_list = []
 
         for ep in range(n_episodes):
             
@@ -274,6 +279,7 @@ class iDQN:
             state = np.concatenate([state, lst_feedback], axis=1)
             state = torch.tensor(state, dtype=torch.float).to(self.device)
             done = False
+            score = 0
 
             while not done:
                 actions = []
@@ -282,6 +288,7 @@ class iDQN:
                     actions.append(a.predict(state_n.to(self.device)))
                     
                 _, reward, done = self.env.step(np.array(actions))
+                score += np.mean(np.maximum(reward, 0))
                 
                 state_next = self.env.current_state.copy()
                 lst_feedback = np.zeros((self.env.k, 1)) + self.env.last_feedback
@@ -301,6 +308,7 @@ class iDQN:
 
             received_list.append(self.env.received_packets.sum())
             discarded_list.append(self.env.discarded_packets)
+            reward_list.append(score)
                                 
-        return 1 - np.sum(discarded_list) / np.sum(received_list)
+        return 1 - np.sum(discarded_list) / np.sum(received_list), np.mean(reward_list)
 

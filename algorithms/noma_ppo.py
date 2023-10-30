@@ -3,8 +3,6 @@ import torch.nn as nn
 from torch.distributions import Bernoulli
 import numpy as np
 
-# torch.autograd.set_detect_anomaly(True)
-
 
 def init_weights(m, gain):
     if isinstance(m, nn.Linear):
@@ -71,15 +69,18 @@ class Actor(nn.Module):
         # actor
         self.encoder = nn.Linear(state_dim, hidden_size)
         self.hidden1 = nn.Linear(hidden_size, hidden_size)
+        self.hidden2 = nn.Linear(hidden_size, hidden_size)
         self.output_layer = nn.Linear(hidden_size, n_devices)
         
         init_weights(self.encoder, 2)
         init_weights(self.hidden1, 2)
+        init_weights(self.hidden2, 2)
         init_weights(self.output_layer, 2)
 
     def forward(self, x): 
         x = torch.relu(self.encoder(x))
         x = torch.relu(self.hidden1(x))
+        x = torch.relu(self.hidden2(x))
         probs = torch.sigmoid(self.output_layer(x))
         return probs
     
@@ -94,15 +95,18 @@ class Critic(nn.Module):
 
         self.encoder = nn.Linear(state_dim, hidden_size)
         self.hidden1 = nn.Linear(hidden_size, hidden_size)
+        self.hidden2 = nn.Linear(hidden_size, hidden_size)
         self.output_layer = nn.Linear(hidden_size, 1)
 
         init_weights(self.encoder, 2)
         init_weights(self.hidden1, 2)
+        init_weights(self.hidden2, 2)
         init_weights(self.output_layer, 2)
     
     def forward(self, x):
         x = torch.relu(self.encoder(x))
         x = torch.relu(self.hidden1(x))
+        x = torch.relu(self.hidden2(x))
         value = self.output_layer(x)
 
         return value
@@ -119,23 +123,37 @@ class NomaPPO:
                  K_epochs=4,
                  eps_clip=0.1,
                  prior_weight=None,
+                 channel_prior_threshold=1,
+                 normalize_channel=True,
                  beta=0.1,
-                 scheduler=False
+                 scheduler=False,
+                 channel_model=None
 ):
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+        self.name = "NOMA-PPO"
         self.env = env
-
+        if channel_model is None:
+            self.channel_model = self.env.channel_model
+        else:
+            self.channel_model = channel_model
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
         self.prior_weight = prior_weight
         self.beta = beta
+        self.channel_prior_threshold = channel_prior_threshold
         self.scheduler = scheduler
-        
+        self.normalize_channel = normalize_channel
+        Tf = (5*(1 / 30 * 1e-3 + 2.34e-6))
+        self.coherence_time = self.env.get_coherence_time(self.env.v) / Tf
+
         self.buffer = RolloutBuffer()
-        self.observation_size = 2 * env.k + 1
+        if self.channel_model == 'collision':
+            self.observation_size = 3 * env.k + 1
+        elif self.channel_model == 'interference':
+            self.observation_size = 4 * env.k + 1
         self.policy = Actor(self.observation_size, env.k, hidden_size=hidden_size).to(self.device)
         self.critic = Critic(self.observation_size, hidden_size=hidden_size).to(self.device)
         self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr_actor)
@@ -148,16 +166,25 @@ class NomaPPO:
         self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
+        
 
-    def compute_prior(self, x):
+    def compute_prior_collision(self, x):
         # Compute the prior given the internal state of the agent and the last time since polled
         if self.prior_weight is None:
             return torch.ones(self.env.k).to(self.device)
+        elif self.prior_weight == 'toy_model':
+            print(torch.tensor(self.env.compute_prior_channel()))
+            return torch.tensor(self.env.compute_prior_channel(), dtype=torch.float).to(self.device)
+        elif self.prior_weight == 'channel':
+            channel_prior = (self.env.Ha / self.env.N) 
+            prior = (channel_prior > self.channel_prior_threshold)*1
+            return torch.tensor(prior, dtype=torch.float)
+
         else:
-            # last_time_since_polled = self.env.last_time_since_polled
+            last_time_since_polled = self.env.last_time_since_polled
             agg_state = self.env.preprocess_state(x)
             prior = torch.zeros(self.env.k)
-            # has_a_packet: idx of the devices that have a packet to transmit.
+            # has_a_packet: idx of the devices that have a packet to transmit. We filter agg_state with the channel quality
             has_a_packet = (agg_state + 1).nonzero()[0]
             sorted_idx = agg_state[has_a_packet].argsort()[:self.env.max_simultaneous_devices]
 
@@ -169,21 +196,118 @@ class NomaPPO:
                 # oldest = (-last_time_since_polled).argsort()[:self.env.max_simultaneous_devices - len(has_a_packet)]
                 prior += self.prior_weight
                 prior[has_a_packet[sorted_idx]] = 1.
-                # prior[oldest] = 1.
             else:
-                # We explore: no prior
-                prior += 1.
+                # We explore: with priority on the devices that have not been polled more that delta frames
+                time_to_poll = last_time_since_polled > self.env.deadlines
+                if sum(time_to_poll) > 0:
+                    prior += self.prior_weight
+                    prior[time_to_poll.nonzero()[0]] = 1
+                else:
+                    prior += 1
+            
+            # channel_prior = (self.env.Ha > self.env.Ha.mean()) * 1.
+            return prior.to(self.device)
+        
+    # def compute_prior_channel(self, x):
+    #     # Compute the prior given the internal state of the agent and the last time since polled
+    #     if self.prior_weight is None:
+    #         return torch.ones(self.env.k).to(self.device)
+    #     elif self.prior_weight == 'toy_model':
+    #         print(torch.tensor(self.env.compute_prior_channel()))
+    #         return torch.tensor(self.env.compute_prior_channel(), dtype=torch.float).to(self.device)
+    #     else:
+    #         # Filter the good/bad channels
+    #         channel_prior = (self.env.Ha / self.env.N) 
+    #         channel_quality = (channel_prior > self.channel_prior_threshold)*1
+
+    #         last_time_since_polled = self.env.last_time_since_polled
+    #         agg_state = self.env.preprocess_state(x)
+    #         prior = torch.zeros(self.env.k)
+    #         # has_a_packet: idx of the devices that have a packet to transmit. We filter agg_state with the channel quality
+    #         agg_state = np.where(channel_quality == 1, agg_state, -1)
+    #         has_a_packet = (agg_state + 1).nonzero()[0]
+    #         sorted_idx = agg_state[has_a_packet].argsort()[:self.env.max_simultaneous_devices]
+
+    #         if len(has_a_packet) >= self.env.max_simultaneous_devices:
+    #             # We set the prior according to the edf scheduler
+    #             prior[has_a_packet[sorted_idx]] = 1.
+    #         elif (len(has_a_packet) < self.env.max_simultaneous_devices) & (len(has_a_packet) > 0):
+    #             # We set the prior of the default prior to prior_weight and the oldest devices to 1.
+    #             # oldest = (-last_time_since_polled).argsort()[:self.env.max_simultaneous_devices - len(has_a_packet)]
+    #             prior += self.prior_weight
+    #             prior[has_a_packet[sorted_idx]] = 1.
+    #             # prior[oldest] = 1.
+    #         else:
+    #             # We explore: with priority on the devices that have not been polled more that delta frames
+    #             time_to_poll = last_time_since_polled > self.env.deadlines
+    #             if sum(time_to_poll) > 0:
+    #                 prior += self.prior_weight
+    #                 prior[time_to_poll.nonzero()[0]] = 1
+    #             else:
+    #                 prior += 1
+            
+    #         # channel_prior = (self.env.Ha > self.env.Ha.mean()) * 1.
+    #         return prior.to(self.device)
+
+
+    def compute_prior_channel(self, x):
+        if self.prior_weight is None:
+            return torch.ones(self.env.k).to(self.device)
+        else:
+            # Put 1 when there is a good channel and decorrelation < ct and when decorrelation > ct
+            channel_prior = (self.env.Ha / self.env.N) 
+            decorrelation = self.env.last_time_since_active
+
+            bad_channels = ((channel_prior < self.channel_prior_threshold) & (decorrelation < self.coherence_time))*1
+            bad_channels = bad_channels.nonzero()[0]
+
+            prior_channel = torch.ones(self.env.k)
+            prior_channel[bad_channels] = 0            
+
+            agg_state = self.env.preprocess_state(x)
+            # has_a_packet: idx of the devices that have a packet to transmit. We filter agg_state with the channel quality
+            has_a_packet = (agg_state + 1)
+            has_a_packet[bad_channels] = 0
+            has_a_packet = has_a_packet.nonzero()[0]
+            sorted_idx = agg_state[has_a_packet].argsort()[:self.env.max_simultaneous_devices]
+            prior_edf = torch.zeros(self.env.k)
+            if len(has_a_packet) >= self.env.max_simultaneous_devices:
+                # We set the prior according to the edf scheduler
+                prior_edf[has_a_packet[sorted_idx]] = 1.
+            elif (len(has_a_packet) < self.env.max_simultaneous_devices) & (len(has_a_packet) > 0):
+                # We set the prior of the default prior to prior_weight and the oldest devices to 1.
+                # oldest = (-last_time_since_polled).argsort()[:self.env.max_simultaneous_devices - len(has_a_packet)]
+                prior_edf += self.prior_weight
+                prior_edf[has_a_packet[sorted_idx]] = 1.
+
+            else:
+                prior_edf = 1.
+            prior = prior_edf * prior_channel
             return prior.to(self.device)
 
+        
+
     def build_obs(self, obs):
-        #last_time_transmitted = self.env.last_time_transmitted
-        last_time_since_polled = self.env.last_time_since_polled
+        last_time_transmitted = self.env.last_time_transmitted.copy()
+        last_time_since_polled = self.env.last_time_since_polled.copy()
         last_feedback = self.env.last_feedback
-        prep_obs = np.concatenate([obs, 1 / last_time_since_polled, [last_feedback]])
+        obs_norm = 1 / (obs+0.01)
+        if self.channel_model == 'interference':
+            last_channel = self.env.Ha.copy()
+        else:
+            last_channel = np.array([])
+        if self.normalize_channel:
+            last_channel_norm = (last_channel / self.env.N) > self.channel_prior_threshold
+        else:
+            last_channel_norm = last_channel / self.env.N
+        prep_obs = np.concatenate([obs_norm,
+                                   last_channel_norm,
+                                   1 / last_time_since_polled,
+                                   1 / last_time_transmitted,
+                                   [last_feedback]])
         return torch.tensor(prep_obs, dtype=torch.float).to(self.device)
 
     def act(self, pobs, prior, train=True):
-
         probs = self.policy_old(pobs.unsqueeze(0))
         probs *= prior
         dist = Bernoulli(probs=probs)
@@ -191,11 +315,12 @@ class NomaPPO:
             action = dist.sample()
             action = action.squeeze()
         else:
-            if prior.sum() == self.env.max_simultaneous_devices:
-                action = prior
-            else:
-                action = dist.probs.squeeze() > 0.5
-                action = action * 1.
+            action = dist.probs.squeeze() > 0.5
+            action = action * 1.
+        
+        # if self.env.timestep == 0:
+        #     action = torch.ones(self.env.k)
+
         action_logprob = dist.log_prob(action).mean(-1)
         
         return action.detach().cpu(), action_logprob.detach().cpu()
@@ -270,54 +395,67 @@ class NomaPPO:
 
     def save(self, checkpoint_path):
         torch.save(self.policy_old.state_dict(), checkpoint_path)
+        print("Model saved!")
 
     def load(self, checkpoint_path):
         self.policy_old.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
         self.policy.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
         
     def test(self, n_episodes=100, verbose=False):
+        self.env.verbose = verbose
         received_list = []
         discarded_list = []
         sense_list = []
         channel_errors = []
+        average_reward = []
+        n_collisions = []
+        jains_list = []
         for e in range(n_episodes):
+            score = 0
             obs = self.env.reset()
             done = False
             while not done:
                 pobs = self.env.preprocess_state(obs)
                 pobs = self.build_obs(pobs)
-                prior = self.compute_prior(obs)
+                if self.channel_model == 'collision':
+                    prior = self.compute_prior_collision(obs)
+                else:
+                    prior = self.compute_prior_channel(obs)
                 ac,_ = self.act(pobs, prior, train=False)
-                if verbose:
-                    print(f"Timestep: {self.env.timestep}")
-                    print(f"Current state: {self.env.current_state}")
-                    print(f"obs: {pobs}, Prior: {prior}")
-                    print(f"Action: {ac}")
-                    print(f"Number discarded: {self.env.discarded_packets}")
                 obs, rwd, done = self.env.step(ac.numpy())
+                score += rwd
                 if verbose:
                     print(f"reward: {rwd}\n\n")
 
+            n_collisions.append(self.env.n_collisions)
             received_list.append(self.env.received_packets.sum())
             discarded_list.append(self.env.discarded_packets)
-            sense_list.append(self.env.nb_sense)
+            # sense_list.append(self.env.nb_sense)
             channel_errors.append(self.env.channel_losses)
-        return 1 - np.sum(discarded_list) / np.sum(received_list), np.mean(channel_errors), np.mean(sense_list) / self.env.episode_length
+            average_reward.append(score)
+            jains_list.append(self.env.compute_jains())
+        return 1 - np.sum(discarded_list) / np.sum(received_list), np.mean(jains_list), np.mean(average_reward), np.mean(n_collisions), np.mean(channel_errors)
     
     def learn(self,
                 n_episodes,
                 update_frequency=10,
                 test_length=100,
+                test_frequency=20,
+                model_path=None,
                 early_stopping=True
                 ):
 
         # printing and logging variables
-        training_scores = []
+        training_scores = [0]
+        training_jains = []
         rewards_list = []
         rollup_rewards = []
         policy_loss_list = []
         value_loss_list = []
         rolling_scores = []
+        test_rewards = []
+        channel_errors_list = []
+        collisions_list = []
 
         # training loop
         for episode in range(n_episodes):
@@ -329,7 +467,10 @@ class NomaPPO:
             while not done:
                 pobs = self.env.preprocess_state(obs)
                 pobs = self.build_obs(pobs)
-                prior = self.compute_prior(obs)
+                if self.channel_model == 'collision':
+                    prior = self.compute_prior_collision(obs)
+                else:
+                    prior = self.compute_prior_channel(obs)
                 action, action_logprob = self.act(pobs, prior, train=True)
                 value = self.critic(pobs).item()
                 
@@ -355,17 +496,26 @@ class NomaPPO:
                 pl, vl = self.update()
                 policy_loss_list.extend(pl)
                 value_loss_list.extend(vl)
-                ts, _, _ = self.test(test_length)
+            if episode % test_frequency == 0:
+                ts, tj, tr, tc, ce = self.test(test_length)
+                test_rewards.append(tr)
+                if (ts > max(training_scores))&(model_path is not None):
+                    self.save(model_path)
+                training_scores.append(ts)
+                training_jains.append(tj)
+                collisions_list.append(tc)
+                channel_errors_list.append(ce)
+
                 if early_stopping:
                     if ts == 1:
-                        return training_scores, rewards_list, policy_loss_list, value_loss_list
-                training_scores.append(ts)
-                print(f"Episode : {episode}, Reward : {np.mean(rollup_rewards)}, Train scores: {np.mean(rolling_scores)}, Test score : {ts}, policy lr: {self.policy_optimizer.param_groups[0]['lr']}")
+                        return training_scores, test_rewards, policy_loss_list, value_loss_list
+                print(f"Episode : {episode}, Reward : {np.mean(rollup_rewards)}, Test score : {ts}, Test jains: {tj}, Collisions: {tc}, Channel errors: {ce}, policy lr: {self.policy_optimizer.param_groups[0]['lr']}")
+                
                 rollup_rewards = []
                 rolling_scores = []
 
 
-        return training_scores, rewards_list, policy_loss_list, value_loss_list
+        return training_scores, training_jains, test_rewards, policy_loss_list, value_loss_list, collisions_list, channel_errors_list
 
 
 
