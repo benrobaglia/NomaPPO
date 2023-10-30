@@ -280,7 +280,7 @@ class NomaPPO:
         jains_list = []
         for e in range(n_episodes):
             # Pad the history with zero tensors so that every input has the same size. 
-            history = [torch.zeros(self.observation_size) for _ in range(self.history_len).to(self.device)]
+            history = [torch.zeros(self.observation_size).to(self.device) for _ in range(self.history_len).to(self.device)]
 
             score = 0
             obs = self.env.reset()
@@ -328,7 +328,7 @@ class NomaPPO:
 
         # training loop
         for episode in range(n_episodes):
-            history = [torch.zeros(self.observation_size) for _ in range(self.history_len)]
+            history = [torch.zeros(self.observation_size).to(self.device) for _ in range(self.history_len)]
             obs = self.env.reset()
             done = False
             current_ep_reward = 0
