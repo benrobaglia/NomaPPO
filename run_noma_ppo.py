@@ -6,7 +6,7 @@ from algorithms.noma_ppo_rnn import NomaPPO
 import random
 
 # output_name = 'results/scenario3gpp/nomappo.p'
-output_name = 'results/scenario3GPP/nomappo_recurrent.p'
+output_name = 'results/scenario3gpp/nomappo_recurrent.p'
 
 # Fix random seed
 random_seed = 42
@@ -25,7 +25,7 @@ verbose = False
 aperiodic_type = 'lambda'
 
 # Load distances and shadowing parameters
-baselines = pickle.load(open('results/scenario3GPP/baselines.p', 'rb'))
+baselines = pickle.load(open('results/scenario3gpp/baselines.p', 'rb'))
 manual_distances_dic = baselines['manual_distances']
 manual_shadowing_dic = baselines['manual_shadowing']
 
@@ -108,7 +108,7 @@ for k in k_list:
                             test_frequency=1000,
                             early_stopping=True)
         
-        score, jains, avg_reward, avg_collisions = nomappo.test(1000)
+        score, jains, avg_reward, avg_collisions, channel_errors = nomappo.test(1000)
         print(f"k: {k}, seed: {seed}, score: {score}, jains: {jains}\n")
         scores_noma_ppo_seed.append(score)
         jains_noma_ppo_seed.append(jains)
