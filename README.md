@@ -1,6 +1,6 @@
 #  Deep Reinforcement Learning for Uplink Scheduling in NOMA-URLLC Networks
 
-This is the code associated with our paper "Deep Reinforcement Learning for Uplink Scheduling in NOMA-URLLC Networks". 
+This is the code associated with our paper "Deep Reinforcement Learning for Uplink Scheduling in NOMA-URLLC Networks" (https://arxiv.org/abs/2308.14523). 
 
 ## Requirements
 Requirements can be found in the requirements.txt file.
